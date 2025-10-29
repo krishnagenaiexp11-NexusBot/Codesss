@@ -23,33 +23,36 @@ SYMBOL = "XAUUSD"
 TIMEFRAME = mt5.TIMEFRAME_M5
 BARS = 500
 
-# Risk / sizing / margin caps
-RISK_PERCENT = 1.0                   # percent of balance risked per trade
-MAX_TOTAL_RISK_PERCENT = 100        # total simultaneous risk across open trades (% balance)
-MAX_MARGIN_USAGE_PERCENT = 30.0     # max margin usage (% balance)
-MIN_FREE_MARGIN = 50.0              # USD free margin buffer
+# Risk / sizing / margin caps (Safer for Gold)
+RISK_PERCENT = 0.35                   # was 1.0 → keeps losses small
+MAX_TOTAL_RISK_PERCENT = 25           # was 100 → no overexposure
+MAX_MARGIN_USAGE_PERCENT = 10.0       # was 30 → prevents margin burnouts
+MIN_FREE_MARGIN = 150.0               # was 50 → protects account
+
 VOLATILITY_ATR_PERIOD = 14
 
-# ATR multipliers (entry)
-SL_ATR_MULTIPLIER = 0.75
-TP_ATR_MULTIPLIER = 3.0
-MIN_SL_ATR_MULTIPLIER = 0.75
+# ATR-based Stop Loss & Take Profit (Correct for XAU M5)
+SL_ATR_MULTIPLIER = 1.8               # was 0.75 → survive gold spikes
+TP_ATR_MULTIPLIER = 1.2               # was 3.0 → increases TP hit-rate
+MIN_SL_ATR_MULTIPLIER = 1.6           # safety floor to avoid tiny stops
 
-# Trailing / breakeven / partials
-TRAIL_ATR_MULTIPLIER_MOVE = 1.0      # move SL to breakeven when profit > 1*ATR (USD trigger uses vpp*atr*vol)
-TRAIL_STEP_ATR = 1.0                 # trail distance in ATR units
-BREAKEVEN_ACTIVATE_ATR = 1.0         # activate breakeven at this ATR USD-equivalent profit
+# Trailing / breakeven / partial close logic
+TRAIL_ATR_MULTIPLIER_MOVE = 0.8       # was 1.0 → breakeven earlier
+TRAIL_STEP_ATR = 1.0
+BREAKEVEN_ACTIVATE_ATR = 0.8          # was 1.0 → secure profits sooner
+
 PARTIAL_CLOSE_ENABLED = True
 PARTIAL_CLOSE_TRIGGER_ATR = 1.0
-PARTIAL_CLOSE_PCT = 0.5
+PARTIAL_CLOSE_PCT = 0.33              # was 0.5 → avoid over-cutting winning legs
 
-# Monitor / roll
-PROFIT_CLOSE_USD = 1.0               # absolute USD trigger to close
-MONITOR_INTERVAL = 30                # seconds between scanning open positions for profit-based roll
-DYNAMIC_TP_PROGRESS_RATIO = 0.50    # consider closing if price progressed >=50% towards TP
-EMA_SLOWING_LOOKBACK = 1             # compare ema_fast now vs this many bars ago to detect slowdown
+# Monitoring & dynamic close logic
+PROFIT_CLOSE_USD = 0.0                # was 1.0 → no early tiny exits
+MONITOR_INTERVAL = 15                 # was 30 → faster trailing logic
+DYNAMIC_TP_PROGRESS_RATIO = 0.45      # was 0.50 → exit earlier when trend weakens
 
-# Strategy indicators
+EMA_SLOWING_LOOKBACK = 1
+
+# Strategy indicators (unchanged, entry logic stays same)
 EMA_FAST = 9
 EMA_SLOW = 20
 SUPERTREND_MULTIPLIER = 3.0
