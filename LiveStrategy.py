@@ -53,6 +53,9 @@ EMA_SLOWING_LOOKBACK = 1             # compare ema_fast now vs this many bars ag
 EMA_FAST = 9
 EMA_SLOW = 20
 SUPERTREND_MULTIPLIER = 3.0
+ADX_PERIOD = 14
+REGIME_ADX_TREND = 20.0
+REGIME_ATR_VOL_MULT = 1.5
 
 # Logging / Telegram
 LOG_DIR = r"C:\Users\krish\Documents\XAUUSD\CSV_analysis"
@@ -71,7 +74,7 @@ MT5_MIRROR_PATH = r"D:\Metatrader - Main\terminal64.exe"
 # Bot behavior
 SLEEP_SECONDS = 60
 MAGIC = 12345678
-COMMENT = "Original Strategy"
+COMMENT = "MaxStrategy"
 
 # ---------------- UTIL / TELEGRAM / LOGGING ----------------
 def send_telegram_html(text):
@@ -229,7 +232,7 @@ def update_trade_close(order_ticket, exit_price, profit, reason):
     if not matches:
         # fallback: append closed row
         row = {
-            "strategy_name":"RiskStrategy","symbol":SYMBOL,"direction":"",
+            "strategy_name":"MaxStrategy","symbol":SYMBOL,"direction":"",
             "entry_time":"","entry_price":np.nan,"sl":np.nan,"tp":np.nan,
             "atr_value":np.nan,"ema_fast":np.nan,"ema_slow":np.nan,"supertrend_dir":"",
             "order_ticket":int(order_ticket_int) if isinstance(order_ticket_int, (int, np.integer)) else order_ticket_int,
@@ -316,6 +319,54 @@ def calc_supertrend(df, period=VOLATILITY_ATR_PERIOD, multiplier=SUPERTREND_MULT
             supertrend_dir.iloc[i] = supertrend_dir.iloc[i-1]
     df['ST_dir'] = supertrend_dir
     return df
+
+def calc_adx(df, period=ADX_PERIOD):
+    df = df.copy()
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+    tr1 = (high - low).abs()
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    atr = true_range.rolling(window=period, min_periods=period).mean()
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(window=period, min_periods=period).mean() / atr
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(window=period, min_periods=period).mean() / atr
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(window=period, min_periods=period).mean()
+
+    df['ADX'] = adx
+    return df
+
+def detect_market_regime(df):
+    if df is None or len(df) < max(ADX_PERIOD, VOLATILITY_ATR_PERIOD) + 5:
+        return "UNKNOWN", {}
+    atr_now = float(df.iloc[-1]['ATR']) if 'ATR' in df.columns else None
+    adx_now = float(df.iloc[-1]['ADX']) if 'ADX' in df.columns else None
+    atr_sma = df['ATR'].rolling(window=VOLATILITY_ATR_PERIOD, min_periods=VOLATILITY_ATR_PERIOD).mean().iloc[-1]
+    atr_ratio = (atr_now / atr_sma) if (atr_now is not None and atr_sma and not np.isnan(atr_sma)) else None
+
+    is_trending = adx_now is not None and adx_now >= REGIME_ADX_TREND
+    is_volatile = atr_ratio is not None and atr_ratio >= REGIME_ATR_VOL_MULT
+
+    if is_trending and is_volatile:
+        regime = "TREND_VOLATILE"
+    elif is_trending:
+        regime = "TREND"
+    elif is_volatile:
+        regime = "VOLATILE_RANGE"
+    else:
+        regime = "RANGE"
+
+    metrics = {"adx": adx_now, "atr_ratio": atr_ratio, "atr": atr_now}
+    return regime, metrics
 
 def get_account_info():
     ai = mt5.account_info()
@@ -668,8 +719,8 @@ def monitor_and_roll(df_latest, atr_latest):
                             if res is not None and getattr(res, "retcode", None) in (10009, 10004, 0, None):
                                 order_id = getattr(res, "order", None) or getattr(res, "deal", None) or 0
                                 metrics = {"atr_value": atr_val if atr_val else 0, "ema_fast": ema_f, "ema_slow": ema_s, "supertrend_dir": "UP" if st_dir else "DOWN"}
-                                log_trade_open("RiskStrategy", SYMBOL, direction, exec_price, new_sl, new_tp, metrics, order_id)
-                                send_entry_alert("RiskStrategy", SYMBOL, direction, exec_price, new_sl, new_tp, metrics, order_id)
+                                log_trade_open("MaxStrategy", SYMBOL, direction, exec_price, new_sl, new_tp, metrics, order_id)
+                                send_entry_alert("MaxStrategy", SYMBOL, direction, exec_price, new_sl, new_tp, metrics, order_id)
                                 # Mirror reopen
                                 mirror_order_to_second_account(direction, lot, new_sl, new_tp)
                                 print(f"[monitor] Reopened {direction} ticket={order_id} vol={lot} price={exec_price}")
@@ -690,10 +741,11 @@ def main():
         return
 
     ensure_log_file()
-    strategy = "RiskStrategy"
+    strategy = "MaxStrategy"
     print("Running", strategy, "on", SYMBOL, "(DEMO recommended)")
 
     last_monitor = datetime.now(timezone.utc) - timedelta(seconds=MONITOR_INTERVAL)
+    last_regime = None
 
     while True:
         try:
@@ -707,11 +759,23 @@ def main():
                 df = calc_ema(df)
                 df = calc_supertrend(df)
                 df = calc_atr(df, VOLATILITY_ATR_PERIOD)
+                df = calc_adx(df, ADX_PERIOD)
                 atr = float(df.iloc[-1]['ATR'])
                 ema_fast = float(df.iloc[-1]['ema_fast'])
                 ema_slow = float(df.iloc[-1]['ema_slow'])
                 st_dir = bool(df.iloc[-1]['ST_dir'])
                 price = float(df.iloc[-1]['close'])
+                regime, regime_metrics = detect_market_regime(df)
+                if regime != last_regime:
+                    adx_val = regime_metrics.get("adx")
+                    atr_ratio = regime_metrics.get("atr_ratio")
+                    print(
+                        f"[regime] {regime} | ADX={adx_val:.2f} "
+                        f"ATR_ratio={atr_ratio:.2f}"
+                        if adx_val is not None and atr_ratio is not None
+                        else f"[regime] {regime}"
+                    )
+                    last_regime = regime
 
             # periodic monitor-and-roll
             if (datetime.now(timezone.utc) - last_monitor).total_seconds() >= MONITOR_INTERVAL:
